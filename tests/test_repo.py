@@ -15,6 +15,10 @@ ABOUT = ("11 Claude skills for day trading: scan thousands of charts, track brea
 ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
               "trader-pelosi", "trader-risk", "trader-broker", "trader-alerts"]
 V1_ONLY = ["trader-copycat", "trader-screener", "trader-tax", "trader-rebalance"]
+# this fork's data scripts at the root (MT5 and Yahoo gold bars into trader/mt5_rates.csv)
+FORK_FILES = ["gold_data.py", "gold_report.py", "mt5_data.py"]
+# never part of the repo: Claude Code's plugin-cache marker, the user's own trader/ data, git's ignore file
+NOT_REPO = {".in_use", "trader", ".gitignore", "__pycache__"}
 
 
 def frontmatter(path):
@@ -26,7 +30,8 @@ def frontmatter(path):
 
 def every_text_file():
     for base, dirs, files in os.walk(ROOT):
-        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__") and
+                   not (base == ROOT and d in NOT_REPO)]
         for f in files:
             if f.endswith((".md", ".py", ".json", ".csv", ".txt", ".xml")) or f == "LICENSE":
                 yield os.path.join(base, f)
@@ -39,8 +44,8 @@ class Repo(unittest.TestCase):
         self.assertEqual(found, sorted(SKILLS))
 
     def test_root_matches_the_reel(self):
-        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git"))
-        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS))
+        root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git") and d not in NOT_REPO)
+        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS + FORK_FILES))
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:

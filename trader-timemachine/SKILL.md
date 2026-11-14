@@ -40,15 +40,18 @@ python3 "${CLAUDE_SKILL_DIR}/timemachine.py" chart --from           # ASCII fan 
 ```
 
 Other flags: `--replays N`, `--seed N` (default 19), `--window N` (default 2
-bars), `--offline FILE` (a saved Yahoo chart JSON, `.json` or `.json.gz`),
-`--now "2026-10-19 10:15"` (New York time) to pin the clock.
+bars), `--csv PATH` (MT5 bars, default `trader/mt5_rates.csv`), `--offline FILE` (a saved Yahoo chart JSON, `.json` or `.json.gz`),
+`--now "2026-10-19 10:15"` (New York time) to pin the clock. `--market gold` (automatic for XAU* and GC=F)
+cuts the bars into the metals day, 18:00 to 17:00 New York, 276 five-minute bars, no forced close, gaps of up
+to 3 bars filled flat; times are 24-hour there (02:15 is 2:15 AM). `--ahead` plans a session after the data's
+last one (a weekend plan for Sunday's open): the replays start at the plan's entry price.
 
 ## What it reads and writes
 
 | file | what |
 | --- | --- |
 | `trader/plan.json` | the plan from trader-exit: symbol, date, entry, entry_time / entry_bar, stop, stop_rule, target, target_r, opening range |
-| Yahoo chart API | one request: 60 days of 5-minute bars (`range=60d&interval=5m`), free and unofficial, can lag |
+| `trader/mt5_rates.csv` | the M5 rows for the plan's symbol, written by `python mt5_data.py` from the open MT5 terminal (read only). `--csv PATH` for another file, `--offline FILE` for a saved Yahoo chart JSON |
 | `trader/timemachine.json` | with `--write`: `{plan, mc, history}` plus the verdict. `mc` holds the odds, percentiles, the fan-chart bands, 160 sample paths and a 24-bin histogram of the close |
 
 ## How it works

@@ -10,7 +10,7 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from decimal import Decimal
 
-from _load import load, FIX, ROOT
+from _load import load, mt5_csv, FIX, ROOT
 
 exitp = load("trader-exit", "exit")
 entry = load("trader-entry", "entry")
@@ -202,6 +202,19 @@ class Cli(unittest.TestCase):
         code, _, err = self.plan("--stop", "atr:1.5", "--offline", TSLA, "--entry-bar", "1")
         self.assertEqual(code, 1)
         self.assertIn("at least 3 closed", err)
+
+    def test_atr_stop_reads_the_mt5_csv_by_default(self):
+        self.write(os.path.join("trader", "entry.json"), REEL_ENTRY)
+        code, _, err = self.plan("--stop", "atr:1.5")
+        self.assertEqual(code, 1)
+        self.assertIn("run python mt5_data.py first", err)
+        with open(TSLA, encoding="utf-8") as fh:
+            mt5_csv(fh.read(), os.path.join("trader", "mt5_rates.csv"))
+        code, text, err = self.plan("--stop", "atr:1.5", "--json")
+        self.assertEqual(code, 0, err)
+        p = json.loads(text)
+        self.assertEqual((p["stop"], p["risk_per_share"], p["target"], p["atr_bars"]), (359.35, 4.83, 373.84, 9))
+        self.assertAlmostEqual(p["atr"], 3.2182, places=4)
 
     def test_refusals_from_the_cli(self):
         self.write(os.path.join("trader", "entry.json"), dict(REEL_ENTRY, status="waiting", time=None, price=None,

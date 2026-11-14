@@ -57,6 +57,25 @@ The tools need Python 3.8 or newer. Nothing to pip install. The SEC tools
 email in `trader/config.json` (`"sec_user_agent": "Your Name you@example.com"`)
 or in the `SEC_USER_AGENT` environment variable.
 
+### This fork: gold and MT5 data
+
+This fork (charru92/day-trader-skill) adds gold. Install it instead of the original:
+
+```
+claude plugin marketplace add charru92/day-trader-skill
+claude plugin install day-trader-skill@day-trader-skill
+```
+
+- `python gold_report.py` prints the trend, levels, how far gold moves by horizon and past look-alikes.
+- `python gold_data.py [--offset X]` downloads GC=F gold futures from Yahoo (M5, M15, H1, H4, D1) into
+  `trader/mt5_rates.csv` as XAUUSDm. `--offset` is XAUUSDm minus GC=F, read at the same moment.
+- `python mt5_data.py` writes the same file from an open MetaTrader 5 terminal (`pip install MetaTrader5`).
+  Read only: it never sends, checks or changes an order.
+- trader-exit and trader-timemachine read that CSV instead of Yahoo. For XAU* and GC=F they use the metals
+  day (18:00 to 17:00 New York, Sunday evening to Friday) and no forced close. The Time Machine adds
+  `--ahead` (plan the next session over a weekend), `--sessions N` (hold for N sessions) and
+  `--detrend` (take the drift of the data out, so a recent trend is not assumed to go on).
+
 ## The eleven
 
 | command | job | what it does |

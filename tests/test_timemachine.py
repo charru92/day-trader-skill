@@ -11,7 +11,7 @@ import unittest
 import urllib.error
 from contextlib import redirect_stdout, redirect_stderr
 
-from _load import load, FIX
+from _load import load, mt5_csv, FIX
 
 tm = load("trader-timemachine", "timemachine")
 
@@ -500,16 +500,26 @@ class Network(unittest.TestCase):
             tm.fetch_chart("ZZZZ")
         self.assertIn("check the ticker", str(cm.exception))
 
-    def test_run_over_the_network_path(self):
-        self.answer([200])
+    def test_default_run_reads_the_mt5_csv_not_yahoo(self):
+        self.answer([])
         d = tempfile.mkdtemp()
         try:
-            p = os.path.join(d, "plan.json")
+            p, c = os.path.join(d, "plan.json"), os.path.join(d, "mt5_rates.csv")
             with open(p, "w") as fh:
                 json.dump(PLAN, fh)
-            code, text, _ = run(["run", "--plan", p, "--now", NOW, "--replays", "300"])
+            mt5_csv(TEXT, c)
+            code, text, _ = run(["run", "--plan", p, "--csv", c, "--now", NOW, "--replays", "300", "--json"])
             self.assertEqual(code, 0)
-            self.assertEqual(self.calls, ["query2"])
+            self.assertEqual(self.calls, [])
+            mine = json.loads(text)
+            code, text, _ = run(["run", "--plan", p, "--offline", TSLA, "--now", NOW, "--replays", "300", "--json"])
+            yahoo = json.loads(text)
+            self.assertEqual(mine["source"], "mt5")
+            for k in ("mc", "history", "verdict", "verdict_notes"):
+                self.assertEqual(mine[k], yahoo[k], k)
+            code, _, err = run(["run", "--plan", p, "--csv", os.path.join(d, "missing.csv"), "--now", NOW])
+            self.assertEqual(code, 1)
+            self.assertIn("run python mt5_data.py first", err)
         finally:
             shutil.rmtree(d)
 

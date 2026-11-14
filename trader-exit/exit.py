@@ -16,7 +16,8 @@ Stops (a long's stop rounds DOWN to the cent, away from the entry):
   price:X    your price
   pct:X      X percent under the entry
   atr:K      K times the 14-bar ATR under the entry, on the session's bars up
-             to the entry bar (--offline FILE or Yahoo). With fewer than 14
+             to the entry bar (trader/mt5_rates.csv from mt5_data.py, or
+             --csv PATH, or --offline FILE). With fewer than 14
              bars by then it averages all of them and says so.
   A level setup has no opening-range default: give a stop.
 
@@ -39,6 +40,7 @@ Exit codes: plan 0 = a plan, 1 = refused or an error. show 0 = a plan exists.
 """
 
 import argparse
+import csv
 import datetime
 import gzip
 import json
@@ -189,6 +191,25 @@ def session(d):
     if d.weekday() >= 5 or d.isoformat() in NYSE_HOLIDAYS:
         return None
     return OPEN, (EARLY if d.isoformat() in NYSE_EARLY_CLOSE else CLOSE)
+
+
+GOLD_OPEN = datetime.time(18, 0)    # the metals day: 18:00 the evening before to 17:00, Sunday to Friday
+GOLD_CLOSE = datetime.time(17, 0)
+
+
+def guess_market(sym):
+    s = sym.upper()
+    return "gold" if s.startswith("XAU") or s in ("GC=F", "MGC=F") else "nyse"
+
+
+def session_window(d, market):
+    """(open, close) New York datetimes of the session that ends on day d, or None if closed."""
+    if market == "gold":
+        if d.weekday() >= 5:
+            return None
+        return datetime.datetime.combine(d - datetime.timedelta(days=1), GOLD_OPEN), datetime.datetime.combine(d, GOLD_CLOSE)
+    s = session(d)
+    return (datetime.datetime.combine(d, s[0]), datetime.datetime.combine(d, s[1])) if s else None
 
 
 # ---------------------------------------------------------------- money math (Decimal, to the cent)
@@ -390,9 +411,36 @@ def read_text(path):
         return fh.read()
 
 
-def load_chart(sym, interval, day, offline=None):
+def read_mt5_csv(path, sym, interval):
+    """trader/mt5_rates.csv from mt5_data.py -> the same chart JSON text Yahoo
+    returns, so the rest reads it unchanged. Rows are closed bars, time in UTC."""
+    tf = {"1m": "M1", "5m": "M5"}[interval]
+    if not os.path.exists(path):
+        raise PlanError("no MT5 data at %s: run python mt5_data.py first" % path)
+    stamps, cols = [], {k: [] for k in ("open", "high", "low", "close", "volume")}
+    try:
+        with open(path, newline="", encoding="utf-8") as fh:
+            for row in csv.DictReader(fh):
+                if row["symbol"].upper() != sym.upper() or row["timeframe"] != tf:
+                    continue
+                stamps.append(int(row["time"]))
+                for k in ("open", "high", "low", "close"):
+                    cols[k].append(float(row[k]))
+                cols["volume"].append(int(row["tick_volume"]))
+    except (OSError, KeyError, ValueError) as e:
+        raise PlanError("could not read %s: %s" % (path, e))
+    if not stamps:
+        raise PlanError("%s has no %s bars of %s: run python mt5_data.py --symbol %s" % (path, tf, sym, sym))
+    meta = {"symbol": sym.upper(), "dataGranularity": interval, "regularMarketTime": stamps[-1] + INTERVALS[interval]}
+    return json.dumps({"chart": {"result": [{"meta": meta, "timestamp": stamps, "indicators": {"quote": [cols]}}],
+                                 "error": None}})
+
+
+def load_chart(sym, interval, day, offline=None, csv_path=None):
     ysym = sym.upper().replace(".", "-")
-    if offline:
+    if csv_path:
+        text = read_mt5_csv(csv_path, sym, interval)
+    elif offline:
         path = offline
         if os.path.isdir(offline):
             path = os.path.join(offline, ysym + ".json")
@@ -439,14 +487,13 @@ def load_chart(sym, interval, day, offline=None):
     return {"bars": bars, "data_time": meta.get("regularMarketTime")}
 
 
-def session_bars(chart, day, interval, upto_slot=None, now_utc=None):
+def session_bars(chart, day, interval, upto_slot=None, now_utc=None, market="nyse"):
     """Closed, on-grid bars of one New York session, oldest first (the live tick is dropped)."""
     step = INTERVALS[interval]
-    s = session(day)
+    s = session_window(day, market)
     if not s:
         return []
-    open_dt = datetime.datetime.combine(day, s[0])
-    close_dt = datetime.datetime.combine(day, s[1])
+    open_dt, close_dt = s
     if now_utc is None and chart.get("data_time"):
         now_utc = utc_of(chart["data_time"])
     local = to_eastern(now_utc) if now_utc else None
@@ -455,7 +502,7 @@ def session_bars(chart, day, interval, upto_slot=None, now_utc=None):
         if b["t"] % step:
             continue
         et = to_eastern(utc_of(b["t"]))
-        if et.date() != day or not (open_dt <= et < close_dt):
+        if not (open_dt <= et < close_dt):
             continue
         if local and et + datetime.timedelta(seconds=step) > local:
             continue
@@ -502,8 +549,11 @@ def read_config(path):
     return cfg
 
 
-def resolve_flat_by(day, explicit, cfg, entry_time):
-    """(HH:MM, note). The config's flat-by moves up with a 1:00 p.m. early close."""
+def resolve_flat_by(day, explicit, cfg, entry_time, market="nyse"):
+    """(HH:MM, note). The config's flat-by moves up with a 1:00 p.m. early close.
+    Gold has no forced close: (None, "") unless --flat-by names one."""
+    if market == "gold":
+        return (hm(parse_hhmm(explicit, "--flat-by")), "") if explicit else (None, "")
     t = parse_hhmm(explicit or cfg.get("flat_by") or DEFAULTS["flat_by"], "--flat-by" if explicit else "flat_by")
     note = ""
     s = session(day) if day else None
@@ -565,6 +615,7 @@ def gather(a):
 def build_plan(a, now_utc):
     info = gather(a)
     cfg = read_config(a.config)
+    market = guess_market(info["symbol"]) if a.market == "auto" else a.market
     stop_text = a.stop
     if not stop_text:
         if info["setup"] != "orb":
@@ -584,15 +635,16 @@ def build_plan(a, now_utc):
     entry_time = parse_clock(info["entry_time"], "the entry time") if info["entry_time"] else None
     atr = atr_n = None
     if stop_rule == "atr":
-        chart = load_chart(info["symbol"], info["interval"], day, a.offline)
-        bars = session_bars(chart, day, info["interval"], info["entry_bar"], parse_now(a.now) if a.now else None)
+        chart = load_chart(info["symbol"], info["interval"], day, a.offline, None if a.offline else a.csv)
+        bars = session_bars(chart, day, info["interval"], info["entry_bar"], parse_now(a.now) if a.now else None,
+                            market)
         if len(bars) < 3:
             raise PlanError("an atr stop needs at least 3 closed %s bars of %s on %s by the entry; found %d"
                             % (info["interval"], info["symbol"], day, len(bars)))
         atr, atr_n = atr_of(bars)
     c = compute(info["entry"], stop_rule, stop_param, target_rule, target_param, info["or_high"], info["or_low"],
                 atr, atr_n)
-    flat_by, flat_note = resolve_flat_by(day, a.flat_by, cfg, entry_time)
+    flat_by, flat_note = resolve_flat_by(day, a.flat_by, cfg, entry_time, market)
     orr = None
     if info["or_high"] is not None and info["or_low"] is not None:
         orr = {"high": float(cents(info["or_high"])), "low": float(cents(info["or_low"])),
@@ -604,7 +656,7 @@ def build_plan(a, now_utc):
             "stop": float(c["stop"]), "stop_rule": stop_rule, "stop_label": c["stop_label"],
             "target": float(c["target"]), "target_r": float(c["target_r"]), "target_label": c["target_label"],
             "risk_per_share": float(c["risk"]), "reward_risk": float(c["reward_risk"]), "flat_by": flat_by,
-            "stop_detail": c["stop_detail"], "created_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), "note": NOTE}
+            "stop_detail": c["stop_detail"], "market": market, "created_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"), "note": NOTE}
     if atr is not None:
         plan["atr"] = round(atr, 4)
         plan["atr_bars"] = atr_n
@@ -643,7 +695,10 @@ def describe(plan):
     out.append("  Target        %s  %s" % (money(plan["target"]), plan["target_label"]))
     out.append("  Risk a share  %s (%s%% of the entry)" % (money(plan["risk_per_share"]), pct))
     out.append("  Reward:risk   %s" % ratio(plan["reward_risk"]))
-    out.append("  Flat by       %s ET, win or lose: no overnight hold" % plan["flat_by"])
+    if plan.get("flat_by"):
+        out.append("  Flat by       %s ET, win or lose: no overnight hold" % plan["flat_by"])
+    else:
+        out.append("  Flat by       none: gold trades about 23 hours a day, the stop or the target ends it")
     out.append("Set before the entry. If price hits the stop, you are out; never move it further away.")
     out.append(NOTE)
     return out
@@ -678,7 +733,7 @@ def cmd_show(a):
         return 1
     plan = read_json(a.plan, "plan")
     for k in ("symbol", "date", "entry", "stop", "target", "risk_per_share", "reward_risk", "flat_by"):
-        if plan.get(k) is None:
+        if plan.get(k) is None and not (k == "flat_by" and plan.get("market") == "gold"):
             raise PlanError("%s is missing %r: make a new plan with exit.py plan --write" % (a.plan, k))
     if a.json:
         print(json.dumps(plan, indent=2))
@@ -709,9 +764,14 @@ def main(argv=None):
     p.add_argument("--side", default="buy", choices=["buy", "long", "sell", "short"], help="v2: buy only")
     p.add_argument("--stop", help="or-mid (orb default), or-low, price:X, pct:X, atr:K")
     p.add_argument("--target", help="2R (default), 1R, 1.5R, price:X")
-    p.add_argument("--flat-by", help="HH:MM New York (default: config flat_by, 15:55)")
+    p.add_argument("--flat-by", help="HH:MM New York (default: config flat_by, 15:55; none for gold)")
+    p.add_argument("--market", default="auto", choices=["auto", "nyse", "gold"],
+                   help="session hours: nyse 9:30-16:00, gold 18:00-17:00 New York, no forced close "
+                        "(auto: gold for XAU*, GC=F)")
     p.add_argument("--config", default="trader/config.json")
-    p.add_argument("--offline", metavar="PATH", help="saved Yahoo chart JSON for an atr stop")
+    p.add_argument("--csv", default="trader/mt5_rates.csv", metavar="PATH",
+                   help="MT5 bars from mt5_data.py for an atr stop (default trader/mt5_rates.csv)")
+    p.add_argument("--offline", metavar="PATH", help="saved Yahoo chart JSON for an atr stop (instead of --csv)")
     p.add_argument("--now", help='pretend it is this New York time, e.g. "2026-10-19 10:15"')
     p.add_argument("--write", nargs="?", const="trader/plan.json", metavar="PATH",
                    help="save the plan (default trader/plan.json)")

@@ -29,14 +29,15 @@ and a neat plan does not change that.
 ```bash
 python3 "${CLAUDE_SKILL_DIR}/exit.py" plan                          # trader/entry.json: midpoint stop, 2R target
 python3 "${CLAUDE_SKILL_DIR}/exit.py" plan --stop or-mid --target 1R --write
-python3 "${CLAUDE_SKILL_DIR}/exit.py" plan --stop atr:1.5           # needs the session's bars (Yahoo or --offline)
+python3 "${CLAUDE_SKILL_DIR}/exit.py" plan --stop atr:1.5           # needs the session's bars (trader/mt5_rates.csv or --offline)
 python3 "${CLAUDE_SKILL_DIR}/exit.py" plan --symbol TSLA --entry 364.18 --or-high 362.18 --or-low 354.47
 python3 "${CLAUDE_SKILL_DIR}/exit.py" show                          # the current trader/plan.json
 ```
 
 Other flags: `--flat-by 15:55`, `--json`, `--now "2026-10-19 10:15"` (New
 York time), `--entry PRICE` with a waiting entry.json to plan ahead, `--setup
-level`, `--offline FILE` (a saved Yahoo chart JSON for an ATR stop).
+level`, `--csv PATH` (MT5 bars, default trader/mt5_rates.csv), `--offline FILE` (a saved Yahoo chart JSON) for an ATR stop. `--market gold` (automatic for
+XAU* and GC=F): the ATR reads the metals day, 18:00 to 17:00 New York, and there is no flat-by time.
 
 ## What it reads and writes
 
@@ -44,7 +45,7 @@ level`, `--offline FILE` (a saved Yahoo chart JSON for an ATR stop).
 | --- | --- |
 | `trader/entry.json` | the trigger from trader-entry: symbol, entry price, time, bar, opening range |
 | `trader/config.json` | `flat_by` (15:55) and `min_reward_risk` (1.0: a note here, trader-risk enforces it) |
-| Yahoo chart API | only for an `atr:K` stop: the session's bars up to the entry bar, free and unofficial |
+| `trader/mt5_rates.csv` | only for an `atr:K` stop: the session's M5 bars up to the entry bar, written by `python mt5_data.py` from the open MT5 terminal (read only). `--csv PATH` for another file |
 | `trader/plan.json` | with `--write`: entry, stop and its rule, target and its R, risk a share, reward:risk, flat by. trader-timemachine, trader-budget and trader-alerts read it |
 
 ## Stops and targets
